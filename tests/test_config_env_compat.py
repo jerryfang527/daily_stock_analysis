@@ -244,6 +244,21 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
 
         self.assertEqual(config.report_language, "en")
 
+    @patch("src.config.setup_env")
+    @patch.object(Config, "_parse_litellm_yaml", return_value=[])
+    def test_report_show_llm_model_defaults_true_and_can_be_disabled(
+        self,
+        _mock_parse_yaml,
+        _mock_setup_env,
+    ) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            config = Config._load_from_env()
+        self.assertTrue(config.report_show_llm_model)
+
+        with patch.dict(os.environ, {"REPORT_SHOW_LLM_MODEL": "false"}, clear=True):
+            config = Config._load_from_env()
+        self.assertFalse(config.report_show_llm_model)
+
     @patch.object(Config, "_parse_litellm_yaml", return_value=[])
     def test_runtime_mutable_keys_reload_from_updated_env_file_after_runtime_refresh(
         self,
