@@ -209,6 +209,63 @@ class TestFeishuSender(unittest.TestCase):
         )
 
     @mock.patch("src.notification_sender.feishu_sender.requests.post")
+    def test_send_markdown_table_uses_structured_card_elements(self, mock_post):
+        mock_post.return_value = _response(200, {"code": 0})
+        cfg = _config(feishu_webhook_url="https://feishu.example/hook")
+        sender = FeishuSender(cfg)
+        content = """# 大盘复盘
+
+| 指标 | 数值 | 观察 |
+| --- | --- | --- |
+| 涨停/跌停 | 125 / 60 | 涨跌停差 +65 |
+"""
+
+        result = sender.send_to_feishu(content)
+
+        self.assertTrue(result)
+        payload = mock_post.call_args.kwargs["json"]
+        serialized = json.dumps(payload["card"]["elements"], ensure_ascii=False)
+        self.assertIn('"tag": "column_set"', serialized)
+        self.assertNotIn("```", serialized)
+        self.assertNotIn("| 指标 |", serialized)
+
+    @mock.patch("src.notification_sender.feishu_sender.time.sleep", return_value=None)
+    @mock.patch("src.notification_sender.feishu_sender.requests.post")
+    def test_chunked_markdown_table_does_not_promote_data_rows_to_headers(self, mock_post, _mock_sleep):
+        mock_post.return_value = _response(200, {"code": 0})
+        cfg = _config(feishu_webhook_url="https://feishu.example/hook", feishu_max_bytes=130)
+        sender = FeishuSender(cfg)
+        rows = "\n".join(
+            f"| {index:06d} | 股票{index:02d} | {index} |"
+            for index in range(1, 10)
+        )
+        content = f"""# 人气股票
+
+| 代码 | 名称 | 热度 |
+| --- | --- | --- |
+{rows}
+"""
+
+        result = sender.send_to_feishu(content)
+
+        self.assertTrue(result)
+        self.assertGreater(mock_post.call_count, 1)
+        continuation_elements = [
+            call.kwargs["json"]["card"]["elements"]
+            for call in mock_post.call_args_list[1:]
+        ]
+        serialized = json.dumps(continuation_elements, ensure_ascii=False)
+        self.assertIn("000004", serialized)
+        self.assertIn("000006", serialized)
+        self.assertNotIn("**000002**", serialized)
+        self.assertNotIn("**000006**", serialized)
+        for elements in continuation_elements:
+            chunk_serialized = json.dumps(elements, ensure_ascii=False)
+            self.assertIn("**代码**", chunk_serialized)
+            self.assertIn("**名称**", chunk_serialized)
+            self.assertIn("**热度**", chunk_serialized)
+
+    @mock.patch("src.notification_sender.feishu_sender.requests.post")
     def test_send_error_response_returns_false(self, mock_post):
         mock_post.return_value = _response(200, {"code": 19024, "msg": "keyword not found"})
         cfg = _config(feishu_webhook_url="https://feishu.example/hook")
@@ -218,6 +275,29 @@ class TestFeishuSender(unittest.TestCase):
 
         self.assertFalse(result)
         self.assertEqual(mock_post.call_count, 2)
+
+    @mock.patch("src.notification_sender.feishu_sender.time.sleep", return_value=None)
+    @mock.patch("src.notification_sender.feishu_sender.format_feishu_markdown", return_value="F" * 180)
+    @mock.patch("src.notification_sender.feishu_sender.requests.post")
+    def test_card_failure_chunks_oversized_fallback_text(self, mock_post, mock_format, _mock_sleep):
+        """Interactive 卡片失败时，回退到文本路径并按配置字节上限分片发送。"""
+        mock_post.side_effect = (
+            [_response(200, {"code": 19024, "msg": "card failed"})]
+            + [_response(200, {"code": 0}) for _ in range(10)]
+        )
+        cfg = _config(feishu_webhook_url="https://feishu.example/hook", feishu_max_bytes=100)
+        sender = FeishuSender(cfg)
+
+        result = sender.send_to_feishu("short")
+
+        self.assertTrue(result)
+        mock_format.assert_called_once_with("short")
+        self.assertGreater(mock_post.call_count, 2)
+        self.assertEqual(mock_post.call_args_list[0].kwargs["json"]["msg_type"], "interactive")
+        for call in mock_post.call_args_list[1:]:
+            payload = call.kwargs["json"]
+            self.assertEqual(payload["msg_type"], "text")
+            self.assertLessEqual(len(payload["content"]["text"].encode("utf-8")), 100)
 
     @mock.patch("src.notification_sender.feishu_sender.requests.post")
     def test_send_with_keyword_that_leaves_too_little_chunk_budget_returns_false(self, mock_post):

@@ -2,6 +2,7 @@
 """
 Unit tests for formatters.
 """
+import json
 import os
 import sys
 import unittest
@@ -9,8 +10,10 @@ import unittest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from src.formatters import (
+    build_feishu_card_elements,
     chunk_content_by_max_words,
     chunk_content_by_max_bytes,
+    format_feishu_markdown,
     slice_at_max_bytes,
     TRUNCATION_SUFFIX,
     MIN_MAX_WORDS,
@@ -172,7 +175,81 @@ class TestChunkContentByMaxBytes(unittest.TestCase):
         joined = "".join(c.replace(TRUNCATION_SUFFIX, "") for c in result)
         self.assertEqual(joined, text)
 
+    def test_chunked_table_content_reuses_table_header_each_chunk(self):
+        rows = "\n".join(
+            f"| 股票{i:03d} | 名称{i:03d} | {1000 + i} |"
+            for i in range(20)
+        )
+        content = "\n".join(
+            ["| 股票代码 | 名称 | 热度 |", "| --- | --- | --- |", rows]
+        )
+        result = chunk_content_by_max_bytes(content, 140)
+
+        self.assertGreaterEqual(len(result), 2)
+        for chunk in result:
+            table_rows = [
+                line.strip()
+                for line in chunk.splitlines()
+                if line.strip().startswith("|") and "|" in line[1:]
+            ]
+            if table_rows:
+                self.assertEqual(table_rows[0], "| 股票代码 | 名称 | 热度 |")
+
     def test_slice_at_max_bytes_returns_truncated_and_remaining_parts(self):
         chunk, remaining = slice_at_max_bytes("测试ABC", 7)
         self.assertEqual(chunk, "测试A")
         self.assertEqual(remaining, "BC")
+
+
+class TestFeishuMarkdownFormatter(unittest.TestCase):
+    """Tests for Feishu lark_md compatible formatting."""
+
+    def test_markdown_table_becomes_aligned_code_block(self):
+        content = """### 盘面温度
+
+| 指标 | 数值 | 观察 |
+|------|------|------|
+| 上涨/下跌 | 3200 / 1800 | 上涨占比 64% |
+"""
+        result = format_feishu_markdown(content)
+
+        self.assertIn("**盘面温度**", result)
+        self.assertIn("```", result)
+        self.assertIn("指标", result)
+        self.assertIn("上涨/下跌", result)
+        self.assertNotIn("• 指标：", result)
+
+    def test_star_list_items_are_normalized(self):
+        result = format_feishu_markdown("*   失效条件：缩量")
+
+        self.assertEqual(result, "• 失效条件：缩量")
+
+    def test_card_elements_render_tables_as_columns(self):
+        content = """# 大盘复盘
+
+> 盘面评分：73/100（强势）
+
+| 指标 | 数值 | 观察 |
+| --- | ---: | --- |
+| 涨停 / 跌停 | 125 / 60 | 涨跌停差 +65 |
+"""
+        elements = build_feishu_card_elements(content)
+        serialized = json.dumps(elements, ensure_ascii=False)
+
+        self.assertIn('"tag": "column_set"', serialized)
+        self.assertIn('"tag": "note"', serialized)
+        self.assertNotIn("```", serialized)
+        self.assertNotIn("| 指标 |", serialized)
+
+    def test_card_table_preserves_escaped_literal_pipes(self):
+        content = """| 类型 | 标题 | 备注 |
+| --- | --- | --- |
+| 新闻 | AI \\| chips | 后续 |
+"""
+        elements = build_feishu_card_elements(content)
+        column_set = next(element for element in elements if element["tag"] == "column_set")
+        serialized = json.dumps(elements, ensure_ascii=False)
+
+        self.assertEqual(len(column_set["columns"]), 3)
+        self.assertIn("AI | chips", serialized)
+        self.assertIn("后续", serialized)

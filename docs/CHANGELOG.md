@@ -46,6 +46,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修复] 调高基本面聚合默认超时预算，降低 Windows/Docker 环境下整段基本面 timeout 的概率。
 - [修复] 正式分析链路兼容 OpenAI-compatible `content_blocks` 响应，避免 `message.content=null` 时被误判为空回复。
 - [文档] Issue #1279 外部响应兼容补证据：本次修复以 `litellm>=1.80.10,!=1.82.7,!=1.82.8,<2.0.0` 为运行时前提，交叉参照 [LiteLLM OpenAI-compatible](https://docs.litellm.ai/docs/providers/openai_compatible) / [OpenAI Chat Completion API](https://platform.openai.com/docs/api-reference/chat)、并以 `tests/test_market_analyzer_generate_text.py` 的 `content_blocks` 与 `list content` 回归样例为复现依据，保留 `message.content` 回退逻辑避免兼容断层。
+- [改进] 飞书报告推送改用结构化交互卡片渲染 Markdown 表格、引用和代码块，减少报告表格在群消息中原样散乱展示。
+- [测试] 补充飞书结构化卡片渲染、表格分片和回退文本分片的回归测试。
 
 ## [3.16.0] - 2026-05-10
 

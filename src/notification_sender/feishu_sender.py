@@ -18,13 +18,13 @@ from src.config import Config
 from src.formatters import (
     MIN_MAX_BYTES,
     PAGE_MARKER_SAFE_BYTES,
+    build_feishu_card_elements,
     chunk_content_by_max_bytes,
     format_feishu_markdown,
 )
 
 
 logger = logging.getLogger(__name__)
-
 
 class FeishuSender:
     
@@ -115,9 +115,6 @@ class FeishuSender:
             logger.warning("飞书 Webhook 未配置，跳过推送")
             return False
         
-        # 飞书 lark_md 支持有限，先做格式转换
-        formatted_content = format_feishu_markdown(content)
-
         max_bytes = self._feishu_max_bytes  # 从配置读取，默认 20000 字节
         keyword_overhead = len(self._get_keyword_prefix().encode('utf-8'))
         effective_max_bytes = max_bytes - keyword_overhead
@@ -127,7 +124,7 @@ class FeishuSender:
             return False
         
         # 检查字节长度，超长则分批发送
-        content_bytes = len(formatted_content.encode('utf-8')) + keyword_overhead
+        content_bytes = len(content.encode('utf-8')) + keyword_overhead
         if content_bytes > max_bytes:
             min_chunk_bytes = MIN_MAX_BYTES + PAGE_MARKER_SAFE_BYTES
             if effective_max_bytes < min_chunk_bytes:
@@ -138,10 +135,10 @@ class FeishuSender:
                 )
                 return False
             logger.info(f"飞书消息内容超长({content_bytes}字节/{len(content)}字符)，将分批发送")
-            return self._send_feishu_chunked(formatted_content, effective_max_bytes)
+            return self._send_feishu_chunked(content, effective_max_bytes)
         
         try:
-            return self._send_feishu_message(formatted_content, timeout_seconds=timeout_seconds)
+            return self._send_feishu_message(content, timeout_seconds=timeout_seconds)
         except Exception as e:
             logger.error(f"发送飞书消息失败: {e}")
             return False
@@ -150,7 +147,8 @@ class FeishuSender:
         """
         分批发送长消息到飞书
         
-        按股票分析块（以 --- 或 ### 分隔）智能分割，确保每批不超过限制
+        按股票分析块（以 --- 或 ### 分隔）智能分割，确保每批不超过限制。
+        包含表格时先转成飞书友好的安全文本，避免分片后丢失表头上下文。
         
         Args:
             content: 完整消息内容
@@ -159,8 +157,10 @@ class FeishuSender:
         Returns:
             是否全部发送成功
         """
+        # 表格跨分片时保留块结构（尤其是表头），避免续片缺少上下文导致渲染失真。
+        chunk_source = content
         try:
-            chunks = chunk_content_by_max_bytes(content, max_bytes, add_page_marker=True)
+            chunks = chunk_content_by_max_bytes(chunk_source, max_bytes, add_page_marker=True)
         except ValueError as e:
             logger.error("飞书消息分片失败，单片预算不足以安全分页（关键词过长或 max_bytes 过小）: %s", e)
             return False
@@ -188,15 +188,15 @@ class FeishuSender:
         return success_count == total_chunks
     
     def _send_feishu_message(self, content: str, *, timeout_seconds: Optional[float] = None) -> bool:
-        """发送单条飞书消息（优先使用 Markdown 卡片）"""
+        """发送单条飞书消息（优先使用结构化消息卡片）"""
         prepared_content = self._apply_keyword_prefix(content)
         security_fields = self._build_security_fields()
 
-        def _post_payload(payload: Dict[str, Any]) -> bool:
+        def _post_payload(payload: Dict[str, Any], payload_text: str = prepared_content) -> bool:
             request_payload = dict(payload)
             request_payload.update(security_fields)
             logger.debug(f"飞书请求 URL: {self._feishu_url}")
-            logger.debug(f"飞书请求 payload 长度: {len(prepared_content)} 字符")
+            logger.debug(f"飞书请求 payload 长度: {len(payload_text)} 字符")
 
             response = requests.post(
                 self._feishu_url,
@@ -225,7 +225,66 @@ class FeishuSender:
                 logger.error(f"响应内容: {response.text}")
                 return False
 
-        # 1) 优先使用交互卡片（支持 Markdown 渲染）
+        def _post_text_payload(text_content: str) -> bool:
+            prepared_text = self._apply_keyword_prefix(text_content)
+            text_payload = {
+                "msg_type": "text",
+                "content": {
+                    "text": prepared_text
+                }
+            }
+            return _post_payload(text_payload, prepared_text)
+
+        def _send_fallback_text(text_content: str) -> bool:
+            max_bytes = self._feishu_max_bytes
+            keyword_overhead = len(self._get_keyword_prefix().encode('utf-8'))
+            effective_max_bytes = max_bytes - keyword_overhead
+
+            if effective_max_bytes <= 0:
+                logger.error("飞书关键词过长，超过单条消息允许的最大字节数，无法发送")
+                return False
+
+            text_bytes = len(text_content.encode('utf-8')) + keyword_overhead
+            if text_bytes <= max_bytes:
+                return _post_text_payload(text_content)
+
+            min_chunk_bytes = MIN_MAX_BYTES + PAGE_MARKER_SAFE_BYTES
+            if effective_max_bytes < min_chunk_bytes:
+                logger.error(
+                    "飞书回退文本分片预算(%s字节)不足以安全分页发送，至少需要 %s 字节",
+                    effective_max_bytes,
+                    min_chunk_bytes,
+                )
+                return False
+
+            try:
+                chunks = chunk_content_by_max_bytes(
+                    text_content,
+                    effective_max_bytes,
+                    add_page_marker=True,
+                )
+            except ValueError as e:
+                logger.error("飞书回退文本分片失败: %s", e)
+                return False
+
+            success_count = 0
+            total_chunks = len(chunks)
+            logger.info("飞书回退文本超长(%s字节/%s字符)，将分批发送：共 %s 批", text_bytes, len(text_content), total_chunks)
+            for i, chunk in enumerate(chunks):
+                if _post_text_payload(chunk):
+                    success_count += 1
+                    logger.info("飞书回退文本第 %s/%s 批发送成功", i + 1, total_chunks)
+                else:
+                    logger.error("飞书回退文本第 %s/%s 批发送失败", i + 1, total_chunks)
+
+                if i < total_chunks - 1:
+                    time.sleep(1)
+
+            return success_count == total_chunks
+
+        # 1) 优先使用结构化交互卡片。飞书的 lark_md 不是完整 Markdown，
+        # 表格/代码块/引用需要拆成卡片元素才会真正渲染。
+        card_elements = build_feishu_card_elements(prepared_content)
         card_payload = {
             "msg_type": "interactive",
             "card": {
@@ -236,27 +295,13 @@ class FeishuSender:
                         "content": "股票智能分析报告"
                     }
                 },
-                "elements": [
-                    {
-                        "tag": "div",
-                        "text": {
-                            "tag": "lark_md",
-                            "content": prepared_content
-                        }
-                    }
-                ]
+                "elements": card_elements,
             }
         }
 
         if _post_payload(card_payload):
             return True
 
-        # 2) 回退为普通文本消息
-        text_payload = {
-            "msg_type": "text",
-            "content": {
-                "text": prepared_content
-            }
-        }
-
-        return _post_payload(text_payload)
+        # 2) 回退为普通文本消息。回退格式可能比原始 Markdown 更长，
+        # 发送前按真实回退文本重新校验并必要时分片。
+        return _send_fallback_text(format_feishu_markdown(content))
