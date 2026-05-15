@@ -259,6 +259,10 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
             config = Config._load_from_env()
         self.assertFalse(config.report_show_llm_model)
 
+        with patch.dict(os.environ, {"REPORT_SHOW_LLM_MODEL": ""}, clear=True):
+            config = Config._load_from_env()
+        self.assertFalse(config.report_show_llm_model)
+
     @patch.object(Config, "_parse_litellm_yaml", return_value=[])
     def test_runtime_mutable_keys_reload_from_updated_env_file_after_runtime_refresh(
         self,

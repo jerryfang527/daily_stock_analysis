@@ -103,6 +103,21 @@ class SystemConfigServiceTestCase(unittest.TestCase):
         self.assertEqual(items["WEBHOOK_VERIFY_SSL"]["value"], "")
         self.assertTrue(items["WEBHOOK_VERIFY_SSL"]["raw_value_exists"])
 
+    def test_get_config_preserves_explicit_empty_report_show_llm_model_value(self) -> None:
+        self._rewrite_env(
+            "STOCK_LIST=600519,000001",
+            "GEMINI_API_KEY=secret-key-value",
+            "SCHEDULE_TIME=18:00",
+            "LOG_LEVEL=INFO",
+            "REPORT_SHOW_LLM_MODEL=",
+        )
+
+        payload = self.service.get_config(include_schema=True)
+        items = {item["key"]: item for item in payload["items"]}
+
+        self.assertEqual(items["REPORT_SHOW_LLM_MODEL"]["value"], "")
+        self.assertTrue(items["REPORT_SHOW_LLM_MODEL"]["raw_value_exists"])
+
     def test_get_setup_status_reports_required_gaps_for_empty_config(self) -> None:
         self._rewrite_env("")
 
