@@ -1215,6 +1215,7 @@ class Config:
     )
     _BOOTSTRAP_RUNTIME_ENV_OVERRIDES_CAPTURED = False
     _BOOTSTRAP_RUNTIME_ENV_OVERRIDES = frozenset()
+    _BOOTSTRAP_RUNTIME_ENV_OVERRIDE_VALUES = {}
     _BOOTSTRAP_RUNTIME_ENV_PRESENT_KEYS = frozenset()
 
     def __post_init__(self) -> None:
@@ -2290,7 +2291,11 @@ class Config:
 
         should_prefer_file = prefer_env_file or key in cls._WEBUI_RUNTIME_ENV_FILE_PRIORITY_KEYS
         if should_prefer_file and file_value is not None:
-            if env_value is not None and cls._has_bootstrap_runtime_env_override(key):
+            if key == "STOCK_LIST_FETCH_API":
+                runtime_override = cls._get_bootstrap_runtime_env_override_value(key)
+                if runtime_override is not None:
+                    return runtime_override
+            elif env_value is not None and cls._has_bootstrap_runtime_env_override(key):
                 return env_value
             return file_value
         if env_value is not None:
@@ -2315,7 +2320,11 @@ class Config:
 
         should_prefer_file = prefer_env_file or key in cls._WEBUI_RUNTIME_ENV_FILE_PRIORITY_KEYS
         if should_prefer_file and file_value is not None:
-            if env_value is not None and cls._has_bootstrap_runtime_env_override(key):
+            if key == "STOCK_LIST_FETCH_API":
+                runtime_override = cls._get_bootstrap_runtime_env_override_value(key)
+                if runtime_override is not None:
+                    return runtime_override
+            elif env_value is not None and cls._has_bootstrap_runtime_env_override(key):
                 return env_value
             return file_value
         if env_value is not None:
@@ -2344,7 +2353,7 @@ class Config:
         if cls._BOOTSTRAP_RUNTIME_ENV_OVERRIDES_CAPTURED:
             return
 
-        explicit_overrides = set()
+        explicit_overrides: Dict[str, str] = {}
         present_keys = set()
         for key in cls._WEBUI_RUNTIME_ENV_FILE_PRIORITY_KEYS:
             env_value = os.environ.get(key)
@@ -2354,11 +2363,17 @@ class Config:
             present_keys.add(key)
             file_value = cls._get_env_file_value(key)
             if file_value is None or env_value != file_value:
-                explicit_overrides.add(key)
+                explicit_overrides[key] = env_value
 
-        cls._BOOTSTRAP_RUNTIME_ENV_OVERRIDES = frozenset(explicit_overrides)
+        cls._BOOTSTRAP_RUNTIME_ENV_OVERRIDES = frozenset(explicit_overrides.keys())
+        cls._BOOTSTRAP_RUNTIME_ENV_OVERRIDE_VALUES = dict(explicit_overrides)
         cls._BOOTSTRAP_RUNTIME_ENV_PRESENT_KEYS = frozenset(present_keys)
         cls._BOOTSTRAP_RUNTIME_ENV_OVERRIDES_CAPTURED = True
+
+    @classmethod
+    def _get_bootstrap_runtime_env_override_value(cls, key: str) -> Optional[str]:
+        cls._capture_bootstrap_runtime_env_overrides()
+        return cls._BOOTSTRAP_RUNTIME_ENV_OVERRIDE_VALUES.get(key)
 
     @classmethod
     def _has_bootstrap_runtime_env_override(cls, key: str) -> bool:
@@ -2504,6 +2519,7 @@ class Config:
         cls._instance = None
         cls._BOOTSTRAP_RUNTIME_ENV_OVERRIDES_CAPTURED = False
         cls._BOOTSTRAP_RUNTIME_ENV_OVERRIDES = frozenset()
+        cls._BOOTSTRAP_RUNTIME_ENV_OVERRIDE_VALUES = {}
         cls._BOOTSTRAP_RUNTIME_ENV_PRESENT_KEYS = frozenset()
 
     def has_searxng_enabled(self) -> bool:
