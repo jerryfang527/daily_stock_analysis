@@ -101,16 +101,21 @@ vi.mock('../../components/settings', () => ({
     </button>
   ),
   LLMChannelEditor: ({
+    items,
     onSaved,
   }: {
+    items: Array<{ key: string; value: string }>;
     onSaved: (items: Array<{ key: string; value: string }>) => void;
   }) => (
-    <button
-      type="button"
-      onClick={() => onSaved([{ key: 'LLM_CHANNELS', value: 'primary,backup' }])}
-    >
-      save llm channels
-    </button>
+    <div>
+      <div data-testid="llm-channel-editor-items">{items.map((item) => item.key).join(',')}</div>
+      <button
+        type="button"
+        onClick={() => onSaved([{ key: 'LLM_CHANNELS', value: 'primary,backup' }])}
+      >
+        save llm channels
+      </button>
+    </div>
   ),
   NotificationTestPanel: ({ items }: { items: Array<{ key: string; value: string }> }) => (
     <div>通知测试面板:{items.map((item) => item.key).join(',')}</div>
@@ -838,7 +843,7 @@ describe('SettingsPage', () => {
           },
           {
             key: 'ALPHASIFT_INSTALL_SPEC',
-            value: 'git+https://github.com/ZhuLinsen/alphasift.git@2c76b2b6074ae3bae01d52e5e830a4af3e3246b2',
+            value: 'git+https://github.com/ZhuLinsen/alphasift.git',
             rawValueExists: true,
             isMasked: false,
             schema: {

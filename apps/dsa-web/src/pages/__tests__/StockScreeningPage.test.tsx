@@ -2,9 +2,10 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import StockScreeningPage from '../StockScreeningPage';
 
-const { enableAlphaSift, getAlphaSiftStatus, screenStocks } = vi.hoisted(() => ({
+const { enableAlphaSift, getAlphaSiftStatus, getStrategies, screenStocks } = vi.hoisted(() => ({
   enableAlphaSift: vi.fn(),
   getAlphaSiftStatus: vi.fn(),
+  getStrategies: vi.fn(),
   screenStocks: vi.fn(),
 }));
 
@@ -12,6 +13,7 @@ vi.mock('../../api/alphasift', () => ({
   alphasiftApi: {
     enable: (...args: unknown[]) => enableAlphaSift(...args),
     getStatus: (...args: unknown[]) => getAlphaSiftStatus(...args),
+    getStrategies: (...args: unknown[]) => getStrategies(...args),
     screen: (...args: unknown[]) => screenStocks(...args),
   },
 }));
@@ -20,7 +22,22 @@ describe('StockScreeningPage', () => {
   beforeEach(() => {
     enableAlphaSift.mockReset();
     getAlphaSiftStatus.mockReset();
+    getStrategies.mockReset();
     screenStocks.mockReset();
+    getStrategies.mockResolvedValue({
+      enabled: true,
+      strategies: [
+        {
+          id: 'dual_low',
+          name: 'Dual Low',
+          description: 'Low valuation strategy',
+          category: 'value',
+          tags: ['value'],
+          marketScope: ['cn'],
+        },
+      ],
+      strategyCount: 1,
+    });
   });
 
   it('re-syncs enabled state when AlphaSift install fails after config is enabled', async () => {
@@ -73,6 +90,6 @@ describe('StockScreeningPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /运行选股/ }));
     await waitFor(() => expect(screenStocks).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(screen.getByText('当前策略：自定义策略（custom_strategy_alpha） · A 股')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/自定义策略 \(custom_strategy_alpha\)/)).toBeInTheDocument());
   });
 });

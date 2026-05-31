@@ -69,4 +69,39 @@ describe('alphasiftApi', () => {
 
     expect(updateConfig.mock.invocationCallOrder[0]).toBeLessThan(post.mock.invocationCallOrder[0]);
   });
+
+  it('loads strategies from the AlphaSift API', async () => {
+    get.mockResolvedValueOnce({
+      data: {
+        enabled: true,
+        strategies: [{ id: 'dual_low', name: 'Dual Low', market_scope: ['cn'] }],
+        strategy_count: 1,
+      },
+    });
+
+    const result = await alphasiftApi.getStrategies();
+
+    expect(get).toHaveBeenCalledWith('/api/v1/alphasift/strategies');
+    expect(result.strategies[0].id).toBe('dual_low');
+    expect(result.strategies[0].marketScope).toEqual(['cn']);
+  });
+
+  it('uses a long timeout for LLM-backed screening', async () => {
+    post.mockResolvedValueOnce({
+      data: {
+        enabled: true,
+        candidates: [],
+        candidate_count: 0,
+        llm_ranked: true,
+      },
+    });
+
+    await alphasiftApi.screen({ market: 'cn', strategy: 'dual_low', maxResults: 3 });
+
+    expect(post).toHaveBeenCalledWith(
+      '/api/v1/alphasift/screen',
+      { market: 'cn', strategy: 'dual_low', max_results: 3 },
+      { timeout: 180000 }
+    );
+  });
 });

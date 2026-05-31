@@ -18,10 +18,7 @@ except ModuleNotFoundError:
 from api.v1.endpoints import alphasift as alphasift_endpoint
 from src.config import Config
 
-DEFAULT_ALPHASIFT_TEST_SPEC = (
-    "git+https://github.com/ZhuLinsen/alphasift.git"
-    "@2c76b2b6074ae3bae01d52e5e830a4af3e3246b2"
-)
+DEFAULT_ALPHASIFT_TEST_SPEC = "git+https://github.com/ZhuLinsen/alphasift.git"
 
 
 def _alphasift_unavailable() -> HTTPException:
@@ -69,6 +66,20 @@ class AlphaSiftOpportunitiesApiTestCase(unittest.TestCase):
 
         self.assertEqual(payload["install_spec_is_default"], False)
         self.assertNotIn("install_spec", payload)
+
+    def test_strategies_use_dsa_adapter_when_enabled(self) -> None:
+        config = self._config(enabled=True)
+        adapter = SimpleNamespace(
+            list_strategies=MagicMock(return_value=[{"id": "dual_low", "name": "Dual Low"}]),
+            screen=MagicMock(),
+        )
+
+        with patch("api.v1.endpoints.alphasift._get_dsa_adapter", return_value=adapter):
+            payload = alphasift_endpoint.alphasift_strategies(config=config)
+
+        self.assertEqual(payload["enabled"], True)
+        self.assertEqual(payload["strategy_count"], 1)
+        self.assertEqual(payload["strategies"][0]["id"], "dual_low")
 
     def test_screen_rejects_when_disabled(self) -> None:
         config = self._config(enabled=False)
@@ -137,6 +148,7 @@ class AlphaSiftOpportunitiesApiTestCase(unittest.TestCase):
                 }),
             ),
             patch("api.v1.endpoints.alphasift.subprocess.run", return_value=completed) as run_mock,
+            patch("api.v1.endpoints.alphasift._get_dsa_adapter", return_value=SimpleNamespace()),
             patch(
                 "api.v1.endpoints.alphasift._import_alphasift",
                 side_effect=[_alphasift_unavailable(), fake_module],
@@ -165,6 +177,7 @@ class AlphaSiftOpportunitiesApiTestCase(unittest.TestCase):
                 }),
             ),
             patch("api.v1.endpoints.alphasift.subprocess.run", return_value=completed) as run_mock,
+            patch("api.v1.endpoints.alphasift._get_dsa_adapter", return_value=SimpleNamespace()),
             patch(
                 "api.v1.endpoints.alphasift._import_alphasift",
                 side_effect=[_alphasift_unavailable(), fake_module],
@@ -179,23 +192,69 @@ class AlphaSiftOpportunitiesApiTestCase(unittest.TestCase):
         run_mock.assert_called_once()
         self.assertIn(config.alphasift_install_spec, run_mock.call_args.args[0])
 
-    def test_screen_calls_alphasift_package_when_enabled(self) -> None:
+    def test_screen_calls_alphasift_adapter_when_enabled(self) -> None:
         config = self._config(enabled=True)
-        fake_module = SimpleNamespace(
-            screen=MagicMock(return_value=[{"code": "600519", "name": "Kweichow Moutai", "score": 88.5}])
+        adapter = SimpleNamespace(
+            screen=MagicMock(return_value={
+                "run_id": "run123",
+                "strategy": "dual_low",
+                "market": "cn",
+                "snapshot_count": 100,
+                "after_filter_count": 5,
+                "llm_ranked": True,
+                "llm_coverage": 1.0,
+                "warnings": ["fallback"],
+                "source_errors": [],
+                "candidates": [
+                    {
+                        "code": "600519",
+                        "name": "Kweichow Moutai",
+                        "score": 88.5,
+                        "llm_score": 90.0,
+                        "llm_thesis": "LLM likes the setup",
+                        "risk_level": "medium",
+                        "risk_flags": ["valuation"],
+                        "price": 1688.0,
+                        "industry": "Baijiu",
+                        "factor_scores": {"value": 88.0},
+                    }
+                ],
+            })
         )
 
-        with patch("api.v1.endpoints.alphasift._import_alphasift", return_value=fake_module):
+        with patch("api.v1.endpoints.alphasift._get_dsa_adapter", return_value=adapter):
             payload = self._screen(config, market="cn", strategy="dual_low", max_results=5)
 
-        fake_module.screen.assert_called_once_with(
+        adapter.screen.assert_called_once_with(
             "dual_low",
             market="cn",
-            max_output=5,
-            use_llm=False,
+            max_results=5,
+            use_llm=True,
         )
+        self.assertEqual(payload["run_id"], "run123")
+        self.assertEqual(payload["snapshot_count"], 100)
+        self.assertEqual(payload["after_filter_count"], 5)
+        self.assertEqual(payload["llm_ranked"], True)
+        self.assertEqual(payload["llm_coverage"], 1.0)
+        self.assertEqual(payload["warnings"], ["fallback"])
         self.assertEqual(payload["candidate_count"], 1)
         self.assertEqual(payload["candidates"][0]["code"], "600519")
+        self.assertEqual(payload["candidates"][0]["llm_score"], 90.0)
+        self.assertEqual(payload["candidates"][0]["llm_thesis"], "LLM likes the setup")
+        self.assertEqual(payload["candidates"][0]["risk_level"], "medium")
+        self.assertEqual(payload["candidates"][0]["price"], 1688.0)
+        self.assertEqual(payload["candidates"][0]["industry"], "Baijiu")
+
+    def test_screen_maps_adapter_value_error_to_bad_request(self) -> None:
+        config = self._config(enabled=True)
+        adapter = SimpleNamespace(screen=MagicMock(side_effect=ValueError("Only market='cn' is currently supported")))
+
+        with patch("api.v1.endpoints.alphasift._get_dsa_adapter", return_value=adapter):
+            with self.assertRaises(HTTPException) as caught:
+                self._screen(config, market="hk", strategy="dual_low", max_results=5)
+
+        self.assertEqual(caught.exception.status_code, 400)
+        self.assertEqual(caught.exception.detail["error"], "alphasift_screen_rejected")
 
 
 if __name__ == "__main__":

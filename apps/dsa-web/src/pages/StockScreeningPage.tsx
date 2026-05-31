@@ -1,79 +1,10 @@
 import type React from 'react';
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { CheckCircle2, CircleAlert, Play, PlusCircle, Search, SlidersHorizontal } from 'lucide-react';
-import { alphasiftApi, type AlphaSiftCandidate } from '../api/alphasift';
+import { alphasiftApi, type AlphaSiftCandidate, type AlphaSiftScreenResponse, type AlphaSiftStrategy } from '../api/alphasift';
 import { AppPage, Button, InlineAlert } from '../components/common';
 
-const STRATEGIES = [
-  {
-    id: 'balanced_multi_factor',
-    title: '均衡多因子',
-    description: '综合估值、资金、动量、稳定性的通用候选发现策略',
-    tag: '框架',
-  },
-  {
-    id: 'theme_heat',
-    title: '资金热度',
-    description: '资金活跃、量价同步但未被透支的短线候选',
-    tag: '动量',
-  },
-  {
-    id: 'dual_low',
-    title: '双低选股',
-    description: '偏稳健的低估值筛选策略，适合价值投资者',
-    tag: '价值',
-  },
-  {
-    id: 'trend_quality',
-    title: '趋势质量',
-    description: '兼顾趋势确认和基本面质量的中线候选发现',
-    tag: '框架',
-  },
-  {
-    id: 'reversal',
-    title: '超跌反转',
-    description: '跌幅可控、流动性仍在、具备修复观察价值的反转候选',
-    tag: '反转',
-  },
-  {
-    id: 'stable_value',
-    title: '稳健价值',
-    description: '估值合理、流动性充足、波动不过热的稳健候选',
-    tag: '价值',
-  },
-  {
-    id: 'pullback_trend',
-    title: '缩量回踩',
-    description: '上升趋势中缩量回踩支撑，观察趋势延续的入场信号',
-    tag: '趋势',
-  },
-  {
-    id: 'volume_breakout',
-    title: '放量突破',
-    description: '成交量放大突破关键阻力位，趋势启动信号',
-    tag: '趋势',
-  },
-];
-
-const MARKETS = [
-  { id: 'cn', label: 'A 股' },
-  { id: 'hk', label: '港股' },
-  { id: 'us', label: '美股' },
-];
-
-const getCandidateReason = (item: AlphaSiftCandidate) => {
-  if (item.reason) {
-    return item.reason;
-  }
-
-  const rawReason = item.raw.reason ?? item.raw.summary ?? item.raw.analysis;
-  return typeof rawReason === 'string' ? rawReason : 'AlphaSift 返回候选，暂无摘要。';
-};
-
-const getSignal = (item: AlphaSiftCandidate) => {
-  const rawSignal = item.raw.action ?? item.raw.signal ?? item.raw.recommendation;
-  return typeof rawSignal === 'string' && rawSignal.trim() ? rawSignal : '观察';
-};
+const MARKETS = [{ id: 'cn', label: 'A 股' }];
 
 const formatScore = (score: AlphaSiftCandidate['score']) => {
   if (score == null || Number.isNaN(Number(score))) {
@@ -82,28 +13,104 @@ const formatScore = (score: AlphaSiftCandidate['score']) => {
   return Number(score).toFixed(2);
 };
 
+const formatNumber = (value: unknown, digits = 2) => {
+  if (value == null || value === '' || Number.isNaN(Number(value))) {
+    return '-';
+  }
+  return Number(value).toFixed(digits);
+};
+
+const formatAmount = (value: unknown) => {
+  if (value == null || value === '' || Number.isNaN(Number(value))) {
+    return '-';
+  }
+  const amount = Number(value);
+  if (Math.abs(amount) >= 100_000_000) {
+    return `${(amount / 100_000_000).toFixed(2)} 亿`;
+  }
+  if (Math.abs(amount) >= 10_000) {
+    return `${(amount / 10_000).toFixed(2)} 万`;
+  }
+  return amount.toFixed(2);
+};
+
+const getCandidateReason = (item: AlphaSiftCandidate) => {
+  if (item.reason) {
+    return item.reason;
+  }
+  const summaries = item.postAnalysisSummaries || {};
+  const summary = Object.values(summaries).find((value) => typeof value === 'string' && value.trim());
+  if (typeof summary === 'string') {
+    return summary;
+  }
+  return 'AlphaSift 返回候选，但没有给出文字摘要。请查看下方因子、风险和原始字段。';
+};
+
+const formatPercent = (value: unknown) => {
+  if (value == null || value === '' || Number.isNaN(Number(value))) {
+    return '-';
+  }
+  return `${(Number(value) * 100).toFixed(0)}%`;
+};
+
+const getSignal = (item: AlphaSiftCandidate) => {
+  const rawSignal = item.raw.action ?? item.raw.signal ?? item.raw.recommendation;
+  return typeof rawSignal === 'string' && rawSignal.trim() ? rawSignal : '观察';
+};
+
+const getFactorEntries = (item: AlphaSiftCandidate) =>
+  Object.entries(item.factorScores || {})
+    .filter(([, value]) => typeof value === 'number')
+    .sort((a, b) => Number(b[1]) - Number(a[1]))
+    .slice(0, 6);
+
 const StockScreeningPage: React.FC = () => {
   const [enabled, setEnabled] = useState(false);
   const [market, setMarket] = useState('cn');
   const [strategy, setStrategy] = useState('dual_low');
-  const [maxResults, setMaxResults] = useState(20);
+  const [strategies, setStrategies] = useState<AlphaSiftStrategy[]>([]);
+  const [maxResults, setMaxResults] = useState(3);
   const [candidates, setCandidates] = useState<AlphaSiftCandidate[]>([]);
+  const [screenMeta, setScreenMeta] = useState<AlphaSiftScreenResponse | null>(null);
   const [expandedCode, setExpandedCode] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [enabling, setEnabling] = useState(false);
   const [error, setError] = useState('');
+  const [strategyLoadError, setStrategyLoadError] = useState('');
 
-  const selectedStrategy = useMemo(() => STRATEGIES.find((item) => item.id === strategy), [strategy]);
-  const selectedStrategyTitle = selectedStrategy?.title ?? '自定义策略';
-  const selectedStrategyTag = selectedStrategy?.tag ?? '自定义';
-  const displayedStrategy = selectedStrategy ? selectedStrategyTitle : `自定义策略（${strategy}）`;
+  const selectedStrategy = useMemo(() => strategies.find((item) => item.id === strategy), [strategies, strategy]);
+  const selectedStrategyTitle = selectedStrategy?.name ?? '自定义策略';
+  const selectedStrategyTag = selectedStrategy?.category || selectedStrategy?.tags?.[0] || '自定义';
+  const displayedStrategy = selectedStrategy ? selectedStrategyTitle : `自定义策略 (${strategy})`;
+
+  const loadStrategies = useCallback(async () => {
+    try {
+      setStrategyLoadError('');
+      const result = await alphasiftApi.getStrategies();
+      const loadedStrategies = result.strategies || [];
+      setStrategies(loadedStrategies);
+      if (loadedStrategies.length > 0) {
+        setStrategy((currentStrategy) =>
+          loadedStrategies.some((item) => item.id === currentStrategy) ? currentStrategy : loadedStrategies[0].id,
+        );
+      }
+    } catch (err) {
+      setStrategies([]);
+      setStrategyLoadError(err instanceof Error ? err.message : 'AlphaSift 策略列表加载失败');
+    }
+  }, []);
 
   useEffect(() => {
     alphasiftApi
       .getStatus()
-      .then((status) => setEnabled(status.enabled))
+      .then((status) => {
+        setEnabled(status.enabled);
+        if (status.enabled) {
+          void loadStrategies();
+        }
+      })
       .catch(() => setEnabled(false));
-  }, []);
+  }, [loadStrategies]);
 
   const handleEnable = async () => {
     setEnabling(true);
@@ -111,6 +118,7 @@ const StockScreeningPage: React.FC = () => {
     try {
       await alphasiftApi.enable();
       setEnabled(true);
+      await loadStrategies();
     } catch (err) {
       try {
         const status = await alphasiftApi.getStatus();
@@ -127,11 +135,14 @@ const StockScreeningPage: React.FC = () => {
   const handleSubmit = async () => {
     setLoading(true);
     setError('');
+    setScreenMeta(null);
     try {
       const result = await alphasiftApi.screen({ market, strategy, maxResults });
+      setScreenMeta(result);
       setCandidates(result.candidates);
       setExpandedCode(result.candidates[0]?.code ?? null);
     } catch (err) {
+      setCandidates([]);
       setError(err instanceof Error ? err.message : '选股失败');
     } finally {
       setLoading(false);
@@ -147,7 +158,7 @@ const StockScreeningPage: React.FC = () => {
           </span>
           <div>
             <h1 className="text-2xl font-bold tracking-normal text-foreground">AlphaSift 选股</h1>
-            <p className="mt-1 text-sm text-secondary-text">开启后调用本地 alphasift.screen() 生成候选股票</p>
+            <p className="mt-1 text-sm text-secondary-text">开启后通过 AlphaSift 适配层生成候选股票</p>
           </div>
         </div>
 
@@ -182,7 +193,7 @@ const StockScreeningPage: React.FC = () => {
         <div className="mb-4 flex items-center justify-between gap-3">
           <div>
             <h2 className="text-sm font-semibold text-foreground">选择策略</h2>
-            <p className="mt-1 text-xs text-secondary-text">策略会作为参数直接传给 AlphaSift，可按需切换或手动输入。</p>
+            <p className="mt-1 text-xs text-secondary-text">策略来自 AlphaSift，DSA 只负责调用稳定适配层。</p>
           </div>
           <span className="rounded-full border border-cyan/30 bg-cyan/10 px-3 py-1 text-xs font-semibold text-cyan">
             {selectedStrategyTag}
@@ -190,7 +201,7 @@ const StockScreeningPage: React.FC = () => {
         </div>
 
         <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
-          {STRATEGIES.map((item) => {
+          {strategies.map((item) => {
             const selected = item.id === strategy;
             return (
               <button
@@ -203,12 +214,19 @@ const StockScreeningPage: React.FC = () => {
                 type="button"
                 onClick={() => setStrategy(item.id)}
               >
-                <span className="text-base font-semibold text-foreground">{item.title}</span>
-                <span className="mt-2 block text-sm leading-6 text-secondary-text">{item.description}</span>
-                <span className="mt-3 inline-flex text-xs font-semibold text-cyan">{item.tag}</span>
+                <span className="text-base font-semibold text-foreground">{item.name || item.id}</span>
+                <span className="mt-2 block text-sm leading-6 text-secondary-text">{item.description || item.id}</span>
+                <span className="mt-3 inline-flex text-xs font-semibold text-cyan">
+                  {item.category || item.tags?.[0] || item.id}
+                </span>
               </button>
             );
           })}
+          {strategies.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-border bg-surface/70 p-4 text-sm text-secondary-text">
+              {strategyLoadError || 'AlphaSift 策略列表暂未载入，可在下方手动输入策略参数。'}
+            </div>
+          ) : null}
         </div>
       </section>
 
@@ -287,12 +305,15 @@ const StockScreeningPage: React.FC = () => {
               </p>
             </div>
           </div>
-          <div className="h-1.5 w-full overflow-hidden rounded-full bg-border sm:w-36">
-            <div
-              className={`h-full rounded-full transition-all ${
-                loading ? 'w-2/3 animate-pulse bg-cyan' : candidates.length > 0 ? 'w-full bg-cyan' : 'w-1/4 bg-border'
-              }`}
-            />
+          <div className="grid gap-1 text-xs text-secondary-text sm:text-right">
+            <span>Run ID：{screenMeta?.runId || '-'}</span>
+            <span>
+              快照 {screenMeta?.snapshotCount ?? '-'} · 过滤后 {screenMeta?.afterFilterCount ?? '-'} · 候选 {screenMeta?.candidateCount ?? candidates.length}
+            </span>
+            <span>
+              LLM：{screenMeta?.llmRanked ? '已重排' : screenMeta ? '未重排' : '-'}
+              {screenMeta?.llmCoverage != null ? ` · 覆盖 ${formatPercent(screenMeta.llmCoverage)}` : ''}
+            </span>
           </div>
         </div>
       </section>
@@ -302,7 +323,7 @@ const StockScreeningPage: React.FC = () => {
           <div>
             <h2 className="text-base font-semibold text-foreground">选股结果</h2>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-secondary-text">
-              AlphaSift 返回的候选会在这里展示，首条结果默认展开，便于快速查看分数、建议和判断依据。
+              AlphaSift 返回的候选会在这里展示，展开后可查看因子、风险、后置分析摘要和原始字段。
             </p>
           </div>
           <div className="flex items-center gap-2 rounded-full border border-border bg-surface px-3 py-2 text-xs text-secondary-text">
@@ -318,44 +339,120 @@ const StockScreeningPage: React.FC = () => {
           </div>
         ) : (
           <div className="overflow-hidden rounded-xl border border-border">
-            <table className="w-full min-w-[760px] border-collapse text-sm">
+            <table className="w-full min-w-[860px] border-collapse text-sm">
               <thead className="bg-surface text-left text-xs text-secondary-text">
                 <tr>
                   <th className="w-14 px-4 py-3 font-semibold">#</th>
                   <th className="px-4 py-3 font-semibold">代码</th>
                   <th className="px-4 py-3 font-semibold">名称</th>
-                  <th className="px-4 py-3 font-semibold">评分 DSA</th>
-                  <th className="px-4 py-3 font-semibold">操作建议</th>
-                  <th className="px-4 py-3 font-semibold">说明</th>
+                  <th className="px-4 py-3 font-semibold">行业</th>
+                  <th className="px-4 py-3 font-semibold">价格</th>
+                  <th className="px-4 py-3 font-semibold">涨跌幅</th>
+                  <th className="px-4 py-3 font-semibold">评分</th>
+                  <th className="px-4 py-3 font-semibold">LLM</th>
+                  <th className="px-4 py-3 font-semibold">风险</th>
+                  <th className="px-4 py-3 font-semibold">详情</th>
                 </tr>
               </thead>
               <tbody>
                 {candidates.map((item) => {
                   const expanded = expandedCode === item.code;
+                  const factors = getFactorEntries(item);
                   return (
-                    <tr
-                      key={`${item.rank}-${item.code}`}
-                      className="border-t border-border align-top transition-colors hover:bg-hover/50"
-                    >
-                      <td className="px-4 py-3 text-secondary-text">{item.rank}</td>
-                      <td className="px-4 py-3 font-mono font-semibold text-foreground">{item.code}</td>
-                      <td className="px-4 py-3 font-semibold text-foreground">{item.name || '-'}</td>
-                      <td className="px-4 py-3 font-bold text-cyan">{formatScore(item.score)}</td>
-                      <td className="px-4 py-3">
-                        <span className="rounded-lg bg-success/10 px-2.5 py-1 text-xs font-semibold text-success">
-                          {getSignal(item)}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <button
-                          className="text-left text-sm text-secondary-text transition-colors hover:text-foreground"
-                          type="button"
-                          onClick={() => setExpandedCode(expanded ? null : item.code)}
-                        >
-                          {expanded ? getCandidateReason(item) : '展开查看'}
-                        </button>
-                      </td>
-                    </tr>
+                    <Fragment key={`${item.rank}-${item.code}`}>
+                      <tr className="border-t border-border align-top transition-colors hover:bg-hover/50">
+                        <td className="px-4 py-3 text-secondary-text">{item.rank}</td>
+                        <td className="px-4 py-3 font-mono font-semibold text-foreground">{item.code}</td>
+                        <td className="px-4 py-3 font-semibold text-foreground">{item.name || '-'}</td>
+                        <td className="px-4 py-3 text-secondary-text">{item.industry || '-'}</td>
+                        <td className="px-4 py-3 text-secondary-text">{formatNumber(item.price)}</td>
+                        <td className="px-4 py-3 text-secondary-text">{formatNumber(item.changePct)}%</td>
+                        <td className="px-4 py-3 font-bold text-cyan">{formatScore(item.score)}</td>
+                        <td className="px-4 py-3 text-secondary-text">{formatScore(item.llmScore)}</td>
+                        <td className="px-4 py-3">
+                          <span className="rounded-lg bg-success/10 px-2.5 py-1 text-xs font-semibold text-success">
+                            {item.riskLevel || 'unknown'}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <button
+                            className="text-sm font-semibold text-cyan transition-colors hover:text-foreground"
+                            type="button"
+                            onClick={() => setExpandedCode(expanded ? null : item.code)}
+                          >
+                            {expanded ? '收起' : '展开查看'}
+                          </button>
+                        </td>
+                      </tr>
+                      {expanded ? (
+                        <tr className="border-t border-border bg-surface/45">
+                          <td colSpan={10} className="px-4 py-4">
+                            <div className="grid gap-4 lg:grid-cols-[1.1fr_1fr]">
+                              <div className="space-y-3">
+                                <div>
+                                  <p className="text-xs font-semibold text-secondary-text">摘要</p>
+                                  <p className="mt-1 text-sm leading-6 text-foreground">{getCandidateReason(item)}</p>
+                                </div>
+                                <div>
+                                  <p className="text-xs font-semibold text-secondary-text">操作信号</p>
+                                  <p className="mt-1 text-sm text-foreground">{getSignal(item)}</p>
+                                </div>
+                                <div>
+                                  <p className="text-xs font-semibold text-secondary-text">LLM 判断</p>
+                                  <p className="mt-1 text-sm leading-6 text-foreground">
+                                    {item.llmThesis || item.reason || '暂无 LLM 判断'}
+                                  </p>
+                                  <p className="mt-1 text-xs text-secondary-text">
+                                    板块 {item.llmSector || '-'} · 主题 {item.llmTheme || '-'} · 置信度 {formatPercent(item.llmConfidence)}
+                                  </p>
+                                </div>
+                                <div>
+                                  <p className="text-xs font-semibold text-secondary-text">风险标签</p>
+                                  <p className="mt-1 text-sm text-foreground">
+                                    {[...(item.riskFlags || []), ...(item.llmRisks || [])].length
+                                      ? [...(item.riskFlags || []), ...(item.llmRisks || [])].join('，')
+                                      : '无'}
+                                  </p>
+                                </div>
+                              </div>
+                              <div className="space-y-3">
+                                <div>
+                                  <p className="text-xs font-semibold text-secondary-text">主要因子</p>
+                                  <div className="mt-2 grid grid-cols-2 gap-2">
+                                    {factors.length > 0 ? (
+                                      factors.map(([key, value]) => (
+                                        <div key={key} className="rounded-lg border border-border bg-card px-3 py-2">
+                                          <span className="block text-xs text-secondary-text">{key}</span>
+                                          <span className="text-sm font-semibold text-foreground">{formatNumber(value)}</span>
+                                        </div>
+                                      ))
+                                    ) : (
+                                      <span className="text-sm text-secondary-text">无因子明细</span>
+                                    )}
+                                  </div>
+                                </div>
+                                <div>
+                                  <p className="text-xs font-semibold text-secondary-text">成交额</p>
+                                  <p className="mt-1 text-sm text-foreground">{formatAmount(item.amount)}</p>
+                                </div>
+                                <div>
+                                  <p className="text-xs font-semibold text-secondary-text">LLM 关注项</p>
+                                  <p className="mt-1 text-sm text-foreground">
+                                    {item.llmWatchItems?.length ? item.llmWatchItems.join('，') : '无'}
+                                  </p>
+                                </div>
+                                <div>
+                                  <p className="text-xs font-semibold text-secondary-text">催化因素</p>
+                                  <p className="mt-1 text-sm text-foreground">
+                                    {item.llmCatalysts?.length ? item.llmCatalysts.join('，') : '无'}
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      ) : null}
+                    </Fragment>
                   );
                 })}
               </tbody>

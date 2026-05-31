@@ -200,7 +200,7 @@ function formatEnvBackupFilename(isDesktopRuntime: boolean) {
   return `${isDesktopRuntime ? 'dsa-desktop-env' : 'dsa-env'}_${date}_${time}.env`;
 }
 
-const TRUSTED_ALPHASIFT_INSTALL_SPEC = 'git+https://github.com/ZhuLinsen/alphasift.git@2c76b2b6074ae3bae01d52e5e830a4af3e3246b2';
+const TRUSTED_ALPHASIFT_INSTALL_SPEC = 'git+https://github.com/ZhuLinsen/alphasift.git';
 
 const SettingsPage: React.FC = () => {
   const { authEnabled, passwordChangeable } = useAuth();
@@ -669,7 +669,7 @@ const SettingsPage: React.FC = () => {
                     </p>
                     {!alphasiftInstallSpecAllowed ? (
                       <p className="mt-1 text-xs leading-6 text-amber-700 dark:text-amber-300">
-                        请把 ALPHASIFT_INSTALL_SPEC 配置为受信任的固定 GitHub commit；本地路径或 wheel 需先手动安装。
+                        请把 ALPHASIFT_INSTALL_SPEC 配置为受信任的 AlphaSift GitHub 仓库；本地路径或 wheel 需先手动安装。
                       </p>
                     ) : null}
                     <p className="mt-2 text-xs leading-6 text-amber-700 dark:text-amber-300">

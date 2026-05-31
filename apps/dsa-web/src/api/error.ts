@@ -356,7 +356,7 @@ export function parseApiError(error: unknown): ParsedApiError {
   if (errorCode === 'alphasift_install_spec_missing') {
     return createParsedApiError({
       title: 'AlphaSift 安装来源未配置',
-      message: '请先在设置页把 ALPHASIFT_INSTALL_SPEC 配置为受信任的固定 GitHub commit，再开启选股。',
+      message: '请先在设置页把 ALPHASIFT_INSTALL_SPEC 配置为受信任的 AlphaSift GitHub 仓库，再开启选股。',
       rawMessage,
       status,
       category: 'http_error',
@@ -366,7 +366,7 @@ export function parseApiError(error: unknown): ParsedApiError {
   if (errorCode === 'alphasift_install_spec_not_allowed') {
     return createParsedApiError({
       title: 'AlphaSift 安装来源受限',
-      message: '自动安装仅允许使用 AlphaSift 官方 GitHub 来源；如需本地路径或 wheel，请先手动安装到当前 Python 环境。',
+      message: '自动安装仅允许使用受信任的 AlphaSift GitHub 来源；如需本地路径或 wheel，请先手动安装到当前 Python 环境。',
       rawMessage,
       status,
       category: 'http_error',
@@ -380,6 +380,16 @@ export function parseApiError(error: unknown): ParsedApiError {
       rawMessage,
       status,
       category: 'http_error',
+    });
+  }
+
+  if (errorCode === 'alphasift_adapter_unavailable') {
+    return createParsedApiError({
+      title: 'AlphaSift 适配层不可用',
+      message: '当前 AlphaSift 版本缺少 DSA 稳定适配层。请重新安装或升级 AlphaSift 后再试。',
+      category: 'http_error',
+      rawMessage,
+      status,
     });
   }
 

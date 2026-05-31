@@ -1,57 +1,53 @@
 # AlphaSift 选股集成
 
-AlphaSift 以最小方式接入 DSA：默认关闭，开启后 Web 侧显示“选股”页签，并通过后端直接调用本地 Python 包的 `alphasift.screen()`。关闭后左侧导航不显示“选股”页签，直接访问 `/screening` 时仍会显示未开启提示。
+AlphaSift 是 DSA 默认关闭的可选选股能力。用户可以通过环境变量或 Web 设置页开启；开启后 DSA 会自动检查并安装 AlphaSift，并通过 AlphaSift 提供的稳定 DSA 适配层读取策略与运行选股。
 
-## 开启
+AlphaSift 结果仅用于研究和辅助判断，不构成投资建议。市场有风险，交易决策和损益由使用者自行承担。
 
-可以直接设置环境变量：
+## 开启方式
+
+最小配置：
 
 ```bash
 ALPHASIFT_ENABLED=true
-ALPHASIFT_INSTALL_SPEC=git+https://github.com/ZhuLinsen/alphasift.git@2c76b2b6074ae3bae01d52e5e830a4af3e3246b2
 ```
 
-也可以在 Web 设置页的 AlphaSift 选股卡片中点击“开启选股”，该操作会写入
-`ALPHASIFT_ENABLED=true`、重新加载运行时配置，并按 `ALPHASIFT_INSTALL_SPEC`
-执行一次自动安装或可用性检查。
+也可以在 Web 设置页打开 AlphaSift 选股开关。Web 开关会写入 `ALPHASIFT_ENABLED=true`，重新加载运行时配置，并触发一次 AlphaSift 可用性检查或自动安装。
 
-`ALPHASIFT_INSTALL_SPEC` 是传给 pip 的安装参数。为避免未认证调用触发任意 pip 安装，并保证部署可复现，默认值固定到当前兼容验证的 AlphaSift commit：
+高级配置：
 
 ```bash
-python -m pip install git+https://github.com/ZhuLinsen/alphasift.git@2c76b2b6074ae3bae01d52e5e830a4af3e3246b2
+ALPHASIFT_INSTALL_SPEC=git+https://github.com/ZhuLinsen/alphasift.git
 ```
 
-后端自动安装只接受上述受信任来源。如需使用本地开发版本、其他 commit 或 wheel 文件，请先在同一个 Python 环境中手动安装，然后再开启 `ALPHASIFT_ENABLED`：
+普通用户通常不需要修改 `ALPHASIFT_INSTALL_SPEC`。该值用于固定自动安装来源到 AlphaSift 官方 GitHub 仓库，避免未认证请求触发任意 pip 安装。AlphaSift 与 DSA 共用同一 Python 环境，并复用 DSA 已加载的环境变量和数据源/LLM 配置，不要求维护单独的 AlphaSift `.env`。
 
-```bash
-python -m pip install -e /path/to/alphasift
-```
+AlphaSift 选股默认开启 LLM 重排，并复用 DSA 的 `LLM_*` 配置。`LLM_TIMEOUT_SEC` 可控制单次 LLM 请求超时，默认 60 秒；超时或上游不可用时，AlphaSift 会降级返回本地筛选排序结果和 warning，而不是让 Web 请求长期挂起。
 
-DSA 调用的 AlphaSift 接口固定为：
+## 集成契约
+
+DSA 只依赖 AlphaSift 的稳定适配层：
 
 ```python
-alphasift.screen(strategy, market=market, max_output=max_results, use_llm=False)
+alphasift.dsa_adapter.get_status()
+alphasift.dsa_adapter.list_strategies()
+alphasift.dsa_adapter.screen(strategy, market="cn", max_results=20)
 ```
 
-## 契约与兼容验证
+DSA 不直接依赖 AlphaSift 内部的 pipeline、models、strategy 实现。AlphaSift 内部可以演进，但需要保持 `dsa_adapter` 的返回结构兼容。
 
-后端 `/api/v1/alphasift/status` 与 `/api/v1/alphasift/install` 只返回非敏感字段，不会回传原始 `ALPHASIFT_INSTALL_SPEC`，并在响应中给出 `install_spec_is_default` 是否为默认可信来源。
-在自动化测试中通过 `tests/test_alphasift_api.py` 固化以下约束：
-
-- 状态接口不返回 `install_spec` 明文。
-- 安装接口返回 `installed`/`already_installed`/`install_spec_is_default`，不返回 `install_spec` 明文。
-- `alphasift.screen` 必须使用固定签名 `screen(strategy, market=..., max_output=..., use_llm=False)` 调用。
-
-当前自动化环境不执行联网安装与运行时真库验收；若需线上复核，请在可访问目标提交的同一 Python 环境手动完成 `pip install` 并访问 `/api/v1/alphasift/screen`，确认上述签名仍可成功执行。
-
-若 AlphaSift 接口不兼容或自动安装失败，可将 `ALPHASIFT_ENABLED=false` 回退为关闭状态；已手动安装的包由运行环境自行管理。
-
-## 接口
+## API
 
 ```text
 GET  /api/v1/alphasift/status
+POST /api/v1/alphasift/install
+GET  /api/v1/alphasift/strategies
 POST /api/v1/alphasift/screen
 ```
+
+`/strategies` 的策略列表来自 AlphaSift，不在 DSA 前端硬编码。`/screen` 返回的候选结果由 AlphaSift 适配层提供，默认开启 AlphaSift 的 LLM 重排，并返回候选代码、名称、分数、LLM 分数、LLM 判断、原因、风险等级、风险标签、价格、行业、因子分数和运行统计等字段。
+
+当前 AlphaSift pipeline 仅支持 `market="cn"`。DSA Web 只展示 A 股选项；如果后端收到其他市场，会返回可读的 400 错误，而不是 500。
 
 请求示例：
 
@@ -63,8 +59,14 @@ POST /api/v1/alphasift/screen
 }
 ```
 
-当前不做通用插件系统、插件市场、CLI/Bot/Scheduler/MCP 集成，也不新增持久化表。DSA 只负责开关、页签、接口透传和结果展示；策略、数据处理与排序逻辑仍由 AlphaSift 自身负责。
+## 失败与回滚
 
-## 风险提示
+AlphaSift 不可用、安装失败或适配层缺失时，只影响选股页面，不影响 DSA 主流程、每日分析、单股分析、报告和通知。
 
-AlphaSift 选股结果仅用于研究和辅助判断，不构成投资建议；市场有风险，交易决策和损益由使用者自行承担。
+回滚方式：
+
+```bash
+ALPHASIFT_ENABLED=false
+```
+
+关闭后 Web 左侧导航隐藏“选股”入口，后端拒绝新的 AlphaSift 选股请求。

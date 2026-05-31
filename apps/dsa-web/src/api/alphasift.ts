@@ -2,6 +2,9 @@ import apiClient from './index';
 import { systemConfigApi } from './systemConfig';
 import { toCamelCase } from './utils';
 
+const ALPHASIFT_SCREEN_TIMEOUT_MS = 180000;
+const ALPHASIFT_INSTALL_TIMEOUT_MS = 180000;
+
 export type AlphaSiftStatus = {
   enabled: boolean;
   available: boolean;
@@ -19,14 +22,64 @@ export type AlphaSiftCandidate = {
   code: string;
   name: string;
   score?: number | null;
+  screenScore?: number | null;
   reason: string;
+  riskLevel?: string;
+  riskFlags?: string[];
+  llmScore?: number | null;
+  llmConfidence?: number | null;
+  llmSector?: string;
+  llmTheme?: string;
+  llmTags?: string[];
+  llmThesis?: string;
+  llmCatalysts?: string[];
+  llmRisks?: string[];
+  llmWatchItems?: string[];
+  llmInvalidators?: string[];
+  llmStyleFit?: string;
+  price?: number | null;
+  changePct?: number | null;
+  amount?: number | null;
+  industry?: string;
+  factorScores?: Record<string, number>;
+  postAnalysisSummaries?: Record<string, string>;
+  postAnalysisTags?: string[];
   raw: Record<string, unknown>;
+};
+
+export type AlphaSiftStrategy = {
+  id: string;
+  name: string;
+  description: string;
+  version?: string;
+  category?: string;
+  tags?: string[];
+  marketScope?: string[];
+};
+
+export type AlphaSiftStrategiesResponse = {
+  enabled: boolean;
+  strategies: AlphaSiftStrategy[];
+  strategyCount: number;
 };
 
 export type AlphaSiftScreenResponse = {
   enabled: boolean;
   candidates: AlphaSiftCandidate[];
   candidateCount: number;
+  runId?: string;
+  strategy?: string;
+  market?: string;
+  snapshotCount?: number;
+  afterFilterCount?: number;
+  llmRanked?: boolean;
+  llmMarketView?: string;
+  llmSelectionLogic?: string;
+  llmPortfolioRisk?: string;
+  llmCoverage?: number | null;
+  llmParseErrors?: string[];
+  warnings?: string[];
+  sourceErrors?: string[];
 };
 
 export function notifyAlphaSiftConfigChanged(): void {
@@ -44,12 +97,17 @@ export const alphasiftApi = {
       market: payload.market,
       strategy: payload.strategy,
       max_results: payload.maxResults,
-    });
+    }, { timeout: ALPHASIFT_SCREEN_TIMEOUT_MS });
     return toCamelCase<AlphaSiftScreenResponse>(response.data);
   },
 
+  async getStrategies(): Promise<AlphaSiftStrategiesResponse> {
+    const response = await apiClient.get<Record<string, unknown>>('/api/v1/alphasift/strategies');
+    return toCamelCase<AlphaSiftStrategiesResponse>(response.data);
+  },
+
   async install(): Promise<AlphaSiftInstallResponse> {
-    const response = await apiClient.post<Record<string, unknown>>('/api/v1/alphasift/install', {}, { timeout: 180000 });
+    const response = await apiClient.post<Record<string, unknown>>('/api/v1/alphasift/install', {}, { timeout: ALPHASIFT_INSTALL_TIMEOUT_MS });
     return toCamelCase<AlphaSiftInstallResponse>(response.data);
   },
 
