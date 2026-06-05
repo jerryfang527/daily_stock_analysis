@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type React from 'react';
 import { Send } from 'lucide-react';
 import { useUiLanguage } from '../../contexts/UiLanguageContext';
@@ -55,11 +55,22 @@ export const NotificationTestPanel: React.FC<NotificationTestPanelProps> = ({
   const [result, setResult] = useState<TestNotificationChannelResponse | null>(null);
   const [error, setError] = useState<ParsedApiError | null>(null);
   const [isTesting, setIsTesting] = useState(false);
+  const [isTitleEdited, setIsTitleEdited] = useState(false);
+  const [isContentEdited, setIsContentEdited] = useState(false);
 
   const normalizedItems = useMemo(
     () => items.map((item) => ({ key: item.key, value: String(item.value ?? '') })),
     [items],
   );
+
+  useEffect(() => {
+    if (!isTitleEdited) {
+      setTitle(t('settings.notificationTestTitleValue'));
+    }
+    if (!isContentEdited) {
+      setContent(t('settings.notificationTestContent'));
+    }
+  }, [isTitleEdited, isContentEdited, t]);
 
   const runTest = async () => {
     setError(null);
@@ -114,7 +125,10 @@ export const NotificationTestPanel: React.FC<NotificationTestPanelProps> = ({
           value={title}
           maxLength={80}
           disabled={disabled || isTesting}
-          onChange={(event) => setTitle(event.target.value)}
+          onChange={(event) => {
+            setIsTitleEdited(true);
+            setTitle(event.target.value);
+          }}
         />
         <Input
           label={t('settings.notificationTestTimeout')}
@@ -135,7 +149,10 @@ export const NotificationTestPanel: React.FC<NotificationTestPanelProps> = ({
           maxLength={1000}
           rows={4}
           disabled={disabled || isTesting}
-          onChange={(event) => setContent(event.target.value)}
+          onChange={(event) => {
+            setIsContentEdited(true);
+            setContent(event.target.value);
+          }}
           className="input-surface input-focus-glow min-h-[112px] w-full resize-y rounded-xl border bg-transparent px-4 py-3 text-sm leading-6 text-foreground outline-none disabled:cursor-not-allowed disabled:opacity-50"
         />
       </label>

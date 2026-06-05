@@ -136,6 +136,39 @@ test.describe('web smoke', () => {
     await expect(page.getByRole('button', { name: /保存配置/ })).toBeVisible();
   });
 
+  test('language switch updates UI copy and persists after page refresh', async ({ page }) => {
+    await login(page);
+
+    const languageToggle = page.getByRole('button', { name: '切换界面语言' });
+    await expect(languageToggle).toBeVisible();
+    await expect(page.getByRole('link', { name: '设置' })).toBeVisible();
+    await expect(page.getByRole('link', { name: '首页' })).toBeVisible();
+
+    await languageToggle.click();
+
+    const englishLanguageToggle = page.getByRole('button', { name: 'Switch UI language' });
+    await expect(englishLanguageToggle).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Settings' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Home' })).toBeVisible();
+
+    expect(await page.evaluate(() => localStorage.getItem('dsa.uiLanguage'))).toBe('en');
+
+    await page.reload();
+    await page.waitForLoadState('domcontentloaded');
+
+    await expect(englishLanguageToggle).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Settings' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Home' })).toBeVisible();
+
+    await page.getByRole('link', { name: 'Settings' }).click();
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
+
+    await expect(page.getByRole('heading', { name: 'System settings' })).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole('button', { name: 'Send test' })).toBeVisible();
+    await expect(page.getByRole('textbox', { name: 'Title' })).toHaveValue('DSA notification test');
+  });
+
   test('backtest page renders filter controls after login', async ({ page }) => {
     await login(page);
 
