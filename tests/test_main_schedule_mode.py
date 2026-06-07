@@ -3,6 +3,7 @@
 
 import logging
 import os
+import socket
 import tempfile
 import unittest
 from datetime import datetime
@@ -111,6 +112,23 @@ class MainScheduleModeTestCase(unittest.TestCase):
             main._warn_if_public_webui_without_auth("127.0.0.1")
 
         warning_log.assert_not_called()
+
+    def test_start_api_server_fails_before_thread_when_port_is_busy(self) -> None:
+        config = self._make_config(log_level="INFO")
+        occupied = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        occupied.bind(("127.0.0.1", 0))
+        occupied.listen(1)
+        port = occupied.getsockname()[1]
+
+        try:
+            with patch("threading.Thread") as thread_cls:
+                with self.assertRaises(RuntimeError) as caught:
+                    main.start_api_server("127.0.0.1", port, config)
+        finally:
+            occupied.close()
+
+        self.assertIn(f"127.0.0.1:{port}", str(caught.exception))
+        thread_cls.assert_not_called()
 
     def test_schedule_mode_ignores_cli_stock_snapshot(self) -> None:
         args = self._make_args(schedule=True, stocks="600519,000001")
@@ -308,6 +326,22 @@ class MainScheduleModeTestCase(unittest.TestCase):
         print_output.assert_called_once_with("通知配置诊断")
         start_api_server.assert_not_called()
         run_full_analysis.assert_not_called()
+
+    def test_serve_mode_exits_when_api_server_start_fails(self) -> None:
+        args = self._make_args(serve_only=True, host="127.0.0.1", port=8000)
+        config = self._make_config(webui_enabled=False)
+
+        with patch("main.parse_arguments", return_value=args), \
+             patch("main.get_config", return_value=config), \
+             patch("main.prepare_webui_frontend_assets", return_value=True), \
+             patch("main.start_api_server", side_effect=RuntimeError("port busy")), \
+             patch("main.start_bot_stream_clients") as start_bots, \
+             patch("main.logger.error") as error_log:
+            exit_code = main.main()
+
+        self.assertEqual(exit_code, 1)
+        start_bots.assert_not_called()
+        error_log.assert_called_once()
 
     def test_reload_runtime_config_preserves_process_env_overrides(self) -> None:
         self.env_path.write_text(

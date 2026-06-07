@@ -5,6 +5,8 @@ import StockScreeningPage from '../StockScreeningPage';
 const {
   enableAlphaSift,
   getAlphaSiftStatus,
+  getHotspotDetail,
+  getHotspots,
   getStrategies,
   getScreenTask,
   resetLastScreenResult,
@@ -39,6 +41,8 @@ const {
   return {
     enableAlphaSift: vi.fn(),
     getAlphaSiftStatus: vi.fn(),
+    getHotspotDetail: vi.fn(),
+    getHotspots: vi.fn(),
     getStrategies: vi.fn(),
     getScreenTask,
     resetLastScreenResult: () => {
@@ -53,6 +57,8 @@ vi.mock('../../api/alphasift', () => ({
   alphasiftApi: {
     enable: () => enableAlphaSift(),
     getStatus: () => getAlphaSiftStatus(),
+    getHotspotDetail: (payload: unknown) => getHotspotDetail(payload),
+    getHotspots: (payload: unknown) => getHotspots(payload),
     getStrategies: () => getStrategies(),
     getScreenTask: (taskId: string) => getScreenTask(taskId),
     screen: (payload: unknown) => screenStocks(payload),
@@ -81,12 +87,25 @@ describe('StockScreeningPage', () => {
   beforeEach(() => {
     enableAlphaSift.mockReset();
     getAlphaSiftStatus.mockReset();
+    getHotspotDetail.mockReset();
+    getHotspots.mockReset();
     getStrategies.mockReset();
     getScreenTask.mockClear();
     resetLastScreenResult();
     screenStocks.mockReset();
     startScreenTask.mockClear();
     getStrategies.mockResolvedValue(mockStrategiesResponse);
+    getHotspotDetail.mockResolvedValue({
+      enabled: true,
+      provider: 'akshare',
+      topic: 'AI算力',
+      name: 'AI算力',
+      summary: 'AI算力 盘中发酵。',
+      route: [{ title: '盘中发酵', description: '出现大笔买入。', source: 'eastmoney_board_change' }],
+      stocks: [{ code: '300000', name: '中际旭创', role: '核心龙头', hotStockScore: 88 }],
+      stockCount: 1,
+    });
+    getHotspots.mockResolvedValue({ enabled: true, provider: 'akshare', hotspots: [], hotspotCount: 0 });
     window.sessionStorage.clear();
   });
 
@@ -116,6 +135,59 @@ describe('StockScreeningPage', () => {
     expect(screen.getByRole('button', { name: /运行选股/ })).toBeDisabled();
     expect(screen.getByText(/适配层当前不可用/)).toBeInTheDocument();
     expect(screen.getByText('AlphaSift 适配层不可用。请执行 pip install -r requirements.txt')).toBeInTheDocument();
+  });
+
+  it('loads AlphaSift hotspot themes on demand', async () => {
+    getAlphaSiftStatus.mockResolvedValueOnce({
+      enabled: true,
+      available: true,
+      installSpecIsDefault: true,
+    });
+    getHotspots
+      .mockResolvedValueOnce({
+        enabled: true,
+        provider: 'akshare',
+        providerUsed: 'akshare',
+        hotspots: [],
+        hotspotCount: 0,
+        cacheUsed: true,
+        cachedAt: '2026-06-07T08:00:00Z',
+      })
+      .mockResolvedValueOnce({
+        enabled: true,
+        provider: 'akshare',
+        providerUsed: 'akshare',
+        hotspots: [
+          {
+            topic: 'AI算力',
+            name: 'AI算力',
+            heatScore: 88,
+            trendScore: 12,
+            persistenceScore: 66,
+            changePct: 4.2,
+            stage: '加速主升',
+            sampleStockCount: 8,
+            leaders: ['中际旭创', '工业富联'],
+          },
+        ],
+        hotspotCount: 1,
+      });
+
+    render(<StockScreeningPage />);
+
+    expect(await screen.findByText('选股已开启')).toBeInTheDocument();
+    await waitFor(() => expect(getHotspots).toHaveBeenCalledWith({ provider: 'akshare', top: 12, refresh: false }));
+    fireEvent.click(screen.getByRole('button', { name: /刷新热点题材/ }));
+
+    await waitFor(() => expect(getHotspots).toHaveBeenCalledWith({ provider: 'akshare', top: 12, refresh: true }));
+    await waitFor(() => expect(getHotspotDetail).toHaveBeenCalledWith({ topic: 'AI算力', provider: 'akshare' }));
+    await waitFor(() => expect(screen.getAllByText('AI算力').length).toBeGreaterThan(0));
+    expect(screen.getByText('加速主升')).toBeInTheDocument();
+    expect(screen.getByText(/中际旭创、工业富联/)).toBeInTheDocument();
+    expect(await screen.findByText('发酵路线')).toBeInTheDocument();
+    expect(screen.getByText('盘中发酵')).toBeInTheDocument();
+    expect(screen.getByText('概念股')).toBeInTheDocument();
+    expect(screen.getByText('中际旭创')).toBeInTheDocument();
   });
 
   it('shows input strategy when strategy is not in preset list', async () => {
