@@ -52,6 +52,21 @@ DSA_ALPHASIFT_HOTSPOT_EVENT_SUMMARY_MAX_CHARS = 90
 DSA_ALPHASIFT_HOTSPOT_PREFETCH_DETAIL_COUNT = 8
 DSA_ALPHASIFT_HOTSPOT_UNAVAILABLE_CODE = "eastmoney_hotspot_unavailable"
 DSA_ALPHASIFT_HOTSPOT_UNAVAILABLE_MESSAGE = "热点源连接中断，暂无可用缓存。"
+DSA_ALPHASIFT_HOTSPOT_CONNECTIVITY_ERROR_MARKERS = (
+    "remote disconnected",
+    "remote end closed connection",
+    "connection aborted",
+    "connection reset",
+    "connection refused",
+    "connection timed out",
+    "read timed out",
+    "connecttimeout",
+    "readtimeout",
+    "max retries exceeded",
+    "chunkedencodingerror",
+    "protocolerror",
+    "incompleteread",
+)
 _DSA_FETCHER_MANAGER_LOCK = threading.RLock()
 _DSA_FETCHER_MANAGER: Any = None
 _FUNDAMENTAL_BLOCKS = ("valuation", "growth", "earnings", "institution", "capital_flow", "boards")
@@ -688,6 +703,67 @@ def _empty_alphasift_hotspot_payload(
     }
 
 
+def _is_known_eastmoney_hotspot_connectivity_error(exc: BaseException) -> bool:
+    retryable_types: List[Any] = [ConnectionError, TimeoutError]
+    try:
+        import requests
+
+        retryable_types.extend(
+            [
+                requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout,
+                requests.exceptions.ChunkedEncodingError,
+            ]
+        )
+    except Exception:
+        pass
+    try:
+        import http.client
+
+        retryable_types.extend([http.client.RemoteDisconnected, http.client.IncompleteRead])
+    except Exception:
+        pass
+    try:
+        import urllib3.exceptions
+
+        retryable_types.extend(
+            [
+                urllib3.exceptions.ProtocolError,
+                urllib3.exceptions.MaxRetryError,
+                urllib3.exceptions.ReadTimeoutError,
+                urllib3.exceptions.ConnectTimeoutError,
+            ]
+        )
+    except Exception:
+        pass
+
+    retryable_tuple = tuple(retryable_types)
+    pending: List[BaseException] = [exc]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        current_id = id(current)
+        if current_id in seen:
+            continue
+        seen.add(current_id)
+        if isinstance(current, retryable_tuple):
+            return True
+        message = f"{current.__class__.__name__}: {current}".lower()
+        if any(marker in message for marker in DSA_ALPHASIFT_HOTSPOT_CONNECTIVITY_ERROR_MARKERS):
+            return True
+        cause = getattr(current, "__cause__", None)
+        context = getattr(current, "__context__", None)
+        if isinstance(cause, BaseException):
+            pending.append(cause)
+        if isinstance(context, BaseException):
+            pending.append(context)
+    return False
+
+
+def _should_return_eastmoney_hotspot_unavailable(provider_arg: Any, exc: BaseException) -> bool:
+    return isinstance(provider_arg, DsaEastMoneyHotspotProvider) and _is_known_eastmoney_hotspot_connectivity_error(exc)
+
+
 class AlphaSiftStrategyResponse(BaseModel):
     id: str
     name: str = ""
@@ -782,6 +858,16 @@ class AlphaSiftService:
                 cached["fallback_used"] = True
                 cached["cache_used"] = True
                 return _attach_cached_hotspot_details(cached, provider=provider_name, top=top_count) if include_details else cached
+            if not _should_return_eastmoney_hotspot_unavailable(provider_arg, exc):
+                diagnostics = _log_unexpected_alphasift_exception("hotspot_refresh", exc)
+                raise HTTPException(
+                    status_code=424,
+                    detail={
+                        "error": "alphasift_hotspot_refresh_failed",
+                        "message": f"AlphaSift hotspot refresh failed: {exc}",
+                        "diagnostics": diagnostics,
+                    },
+                ) from exc
             logger.warning("AlphaSift hotspot live refresh failed without cache: %s", exc)
             return _empty_alphasift_hotspot_payload(
                 provider=provider_name,

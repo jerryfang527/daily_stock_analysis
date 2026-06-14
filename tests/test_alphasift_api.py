@@ -565,6 +565,47 @@ class AlphaSiftOpportunitiesApiTestCase(unittest.TestCase):
         self.assertNotIn("RemoteDisconnected", payload["message"])
         discover.assert_called_once()
 
+    def test_hotspots_refresh_runtime_failure_without_cache_raises_integration_error(self) -> None:
+        config = self._config(enabled=True)
+        discover = MagicMock(side_effect=RuntimeError("adapter contract returned invalid payload"))
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_path = Path(tmpdir) / "missing-hotspots.json"
+            provider = alphasift_service.DsaEastMoneyHotspotProvider()
+            with (
+                patch("src.services.alphasift_service.DSA_ALPHASIFT_HOTSPOT_CACHE_PATH", cache_path),
+                patch("src.services.alphasift_service._get_alphasift_status_snapshot", return_value=({}, True, {})),
+                patch("src.services.alphasift_service._resolve_hotspot_provider", return_value=("akshare", provider)),
+                patch("src.services.alphasift_service._import_alphasift_hotspot", return_value=SimpleNamespace(discover_hotspots=discover)),
+            ):
+                with self.assertRaises(HTTPException) as caught:
+                    self._hotspots(config=config, provider="akshare", top=1, refresh=True)
+
+        self.assertEqual(caught.exception.status_code, 424)
+        self.assertEqual(caught.exception.detail["error"], "alphasift_hotspot_refresh_failed")
+        self.assertIn("adapter contract returned invalid payload", caught.exception.detail["message"])
+        discover.assert_called_once()
+
+    def test_hotspots_refresh_non_akshare_failure_without_cache_raises_integration_error(self) -> None:
+        config = self._config(enabled=True)
+        discover = MagicMock(side_effect=RuntimeError("RemoteDisconnected('remote provider failed')"))
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_path = Path(tmpdir) / "missing-hotspots.json"
+            with (
+                patch("src.services.alphasift_service.DSA_ALPHASIFT_HOTSPOT_CACHE_PATH", cache_path),
+                patch("src.services.alphasift_service._get_alphasift_status_snapshot", return_value=({}, True, {})),
+                patch("src.services.alphasift_service._resolve_hotspot_provider", return_value=("custom", "custom")),
+                patch("src.services.alphasift_service._import_alphasift_hotspot", return_value=SimpleNamespace(discover_hotspots=discover)),
+            ):
+                with self.assertRaises(HTTPException) as caught:
+                    self._hotspots(config=config, provider="custom", top=1, refresh=True)
+
+        self.assertEqual(caught.exception.status_code, 424)
+        self.assertEqual(caught.exception.detail["error"], "alphasift_hotspot_refresh_failed")
+        self.assertIn("RemoteDisconnected", caught.exception.detail["message"])
+        discover.assert_called_once()
+
     def test_hotspot_provider_retries_transient_eastmoney_failure(self) -> None:
         import requests
 
