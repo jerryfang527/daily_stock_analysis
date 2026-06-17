@@ -45,4 +45,10 @@ NEWS_INTEL_MAX_ITEMS_PER_SOURCE=50
 
 ## 后续接入建议
 
-首版只完成资讯源与存储基线。后续 PR 可以接入个股分析、大盘复盘、报告 evidence 展示和 Web 设置/报告查看入口。
+首版基线之上，分析链路会 best-effort 读取本地资讯池：
+
+- 个股传统分析会优先读取 `symbol=<股票代码>` 的资讯，并补充同市场 `market` 级资讯；内容追加到既有 `news_context`，随 AnalysisContextPack 摘要和历史 `news_content` 保存。
+- Agent 分析同样通过 `news_context` 注入本地资讯证据，避免 Agent 必须重新搜索才能看到已沉淀新闻。
+- 大盘复盘会把同市场 `market` 级资讯合并到市场新闻列表，Prompt、结构化 payload 和报告 news 字段都能看到来源链接。
+
+后续 PR 可以继续完善报告 evidence 展示和 Web 设置/报告查看入口。

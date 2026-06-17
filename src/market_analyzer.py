@@ -26,6 +26,7 @@ from src.core.market_profile import get_profile, MarketProfile
 from src.core.market_strategy import get_market_strategy_blueprint
 from src.schemas.market_light import MarketLightSnapshot
 from src.services.run_diagnostics import record_llm_run, record_llm_run_started
+from src.services.intelligence_service import IntelligenceService
 from data_provider.base import DataFetcherManager
 
 logger = logging.getLogger(__name__)
@@ -1454,6 +1455,7 @@ Market conditions can change quickly. The data above is for reference only and d
 
         # 2. 搜索市场新闻
         news = self.search_market_news()
+        news = self._merge_persisted_market_intelligence(news)
 
         # 3. 生成复盘报告
         report = self.generate_market_review(overview, news)
@@ -1473,6 +1475,41 @@ Market conditions can change quickly. The data above is for reference only and d
             market_light_snapshot=snapshot,
             structured_payload=structured_payload,
         )
+
+    def _merge_persisted_market_intelligence(self, news: List) -> List:
+        """Append locally persisted market intelligence to market-review news, fail-open."""
+        merged = list(news or [])
+        seen_urls = {
+            self._get_news_field(item, "url")
+            for item in merged
+            if self._get_news_field(item, "url")
+        }
+        try:
+            service = IntelligenceService()
+            payload = service.list_items(
+                scope_type="market",
+                market=self.region,
+                days=max(1, int(getattr(self.config, "news_max_age_days", 3) or 3)),
+                page=1,
+                page_size=6,
+            )
+            for item in payload.get("items", []):
+                if not isinstance(item, dict):
+                    continue
+                url = str(item.get("url") or "")
+                if url and url in seen_urls:
+                    continue
+                seen_urls.add(url)
+                merged.append({
+                    "title": item.get("title") or "未命名资讯",
+                    "snippet": item.get("summary") or "",
+                    "source": item.get("source") or item.get("source_name") or "local-intel",
+                    "published_date": item.get("published_at") or item.get("fetched_at") or "",
+                    "url": "" if url.startswith("no-url:intel:") else url,
+                })
+        except Exception as exc:
+            logger.debug("[大盘] %s action=load_local_intelligence status=failed error=%s", self._log_context(), exc)
+        return merged
 
     def run_daily_review(self) -> str:
         """

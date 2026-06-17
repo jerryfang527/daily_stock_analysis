@@ -55,6 +55,7 @@ from src.services.daily_market_context import (
     format_daily_market_context_prompt_section,
 )
 from src.services.social_sentiment_service import SocialSentimentService
+from src.services.intelligence_service import IntelligenceService
 from src.services.analysis_context_builder import (
     AnalysisContextBuilder,
     PipelineAnalysisArtifacts,
@@ -476,6 +477,11 @@ class StockAnalysisPipeline:
 
             # Step 4: 多维度情报搜索（最新消息+风险排查+业绩预期）
             news_context = None
+            persisted_intelligence_context = self._load_persisted_intelligence_context(
+                code=code,
+                stock_name=stock_name,
+                market=market or "cn",
+            )
             news_result_count: Optional[int] = None
             self._emit_progress(46, f"{stock_name}：正在检索新闻与舆情")
             if self.search_service is not None and self.search_service.is_available:
@@ -528,6 +534,13 @@ class StockAnalysisPipeline:
                             news_context = social_context
                 except Exception as e:
                     logger.warning(f"{stock_name}({code}) Social sentiment fetch failed: {e}")
+
+            if persisted_intelligence_context:
+                news_context = (
+                    f"{news_context}\n\n{persisted_intelligence_context}"
+                    if news_context
+                    else persisted_intelligence_context
+                )
 
             # Step 5: 获取分析上下文（技术面数据）
             self._emit_progress(58, f"{stock_name}：正在整理分析上下文")
@@ -1114,6 +1127,20 @@ class StockAnalysisPipeline:
                         logger.info(f"[{code}] Agent mode: social sentiment data injected into news_context")
                 except Exception as e:
                     logger.warning(f"[{code}] Agent mode: social sentiment fetch failed: {e}")
+
+            persisted_intelligence_context = self._load_persisted_intelligence_context(
+                code=code,
+                stock_name=stock_name,
+                market=get_market_for_stock(normalize_stock_code(code)) or "cn",
+            )
+            if persisted_intelligence_context:
+                existing = initial_context.get("news_context")
+                initial_context["news_context"] = (
+                    f"{existing}\n\n{persisted_intelligence_context}"
+                    if existing
+                    else persisted_intelligence_context
+                )
+                logger.info(f"[{code}] Agent mode: local intelligence evidence injected into news_context")
 
             # Issue #1066: ensure deep history is in DB before agent tools run
             self._ensure_agent_history(code)
@@ -2216,6 +2243,58 @@ class StockAnalysisPipeline:
                 )
             except Exception as exc:
                 logger.warning("回写通知诊断快照失败（fail-open）: %s", exc)
+
+    def _load_persisted_intelligence_context(
+        self,
+        *,
+        code: str,
+        stock_name: str,
+        market: str,
+        limit: int = 6,
+    ) -> Optional[str]:
+        """Load locally persisted intelligence as fail-open evidence context."""
+        try:
+            service = IntelligenceService()
+            days = max(1, int(getattr(self.config, "news_max_age_days", 3) or 3))
+            collected: list[Dict[str, Any]] = []
+            seen_urls: set[str] = set()
+            for filters in (
+                {"scope_type": "symbol", "scope_value": normalize_stock_code(code), "market": market},
+                {"scope_type": "symbol", "scope_value": code, "market": market},
+                {"scope_type": "market", "market": market},
+            ):
+                payload = service.list_items(days=days, page=1, page_size=limit, **filters)
+                for item in payload.get("items", []):
+                    if not isinstance(item, dict):
+                        continue
+                    url = str(item.get("url") or "")
+                    if url in seen_urls:
+                        continue
+                    seen_urls.add(url)
+                    collected.append(item)
+                    if len(collected) >= limit:
+                        break
+                if len(collected) >= limit:
+                    break
+            if not collected:
+                return None
+            lines = [f"## 本地资讯证据池（{stock_name}/{code}）"]
+            for idx, item in enumerate(collected[:limit], 1):
+                title = str(item.get("title") or "未命名资讯").strip()
+                summary = str(item.get("summary") or "").strip()
+                source = str(item.get("source") or item.get("source_name") or "local-intel").strip()
+                published = str(item.get("published_at") or item.get("fetched_at") or "").strip()
+                url = str(item.get("url") or "").strip()
+                meta = " / ".join(part for part in (source, published) if part)
+                lines.append(f"{idx}. {title}" + (f"（{meta}）" if meta else ""))
+                if summary:
+                    lines.append(f"   摘要：{summary[:220]}")
+                if url and not url.startswith("no-url:intel:"):
+                    lines.append(f"   来源：{url}")
+            return "\n".join(lines)
+        except Exception as exc:
+            logger.debug("读取本地资讯证据失败（fail-open）: %s", exc)
+            return None
 
     def _build_legacy_analysis_artifacts(
         self,
