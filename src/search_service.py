@@ -3737,6 +3737,8 @@ class SearchService:
                     response,
                     search_days=search_days,
                     max_results=provider_max_results,
+                    # 同 intel 路径：SearXNG 自建实例结果普遍无 publishedDate，放行未知日期
+                    keep_unknown=isinstance(provider, SearXNGSearchProvider),
                     log_scope=f"{stock_code}:{provider.name}:stock_news",
                 )
                 had_provider_success = had_provider_success or bool(response.success)
