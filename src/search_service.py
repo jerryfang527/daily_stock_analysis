@@ -1905,7 +1905,8 @@ class SearXNGSearchProvider(BaseSearchProvider):
                 "(KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
             }
             params = {
-                "q": query,
+                # 追加"新闻"词，让通用引擎优先返回新闻类结果（而非行情页）
+                "q": f"{query} 新闻" if "新闻" not in query else query,
                 "format": "json",
                 "time_range": self._time_range(days),
                 "pageno": 1,
@@ -2476,6 +2477,9 @@ class SearchService:
 
     # A-share ETF code prefixes (Shanghai 51/52/56/58, Shenzhen 15/16/18)
     _A_ETF_PREFIXES = ('51', '52', '56', '58', '15', '16', '18')
+    _OPEN_FUND_PREFIXES = ('00', '01', '02', '03', '31', '36')
+    _BOARD_PREFIXES = ('86', '88')  # 行业板块: 88xxxx, 86xxxx
+    _CONCEPT_PREFIXES = ('B82',)    # 概念板块: B82xxx
     _ETF_NAME_KEYWORDS = ('ETF', 'FUND', 'TRUST', 'INDEX', 'TRACKER', 'UNIT')  # US/HK ETF name hints
 
     @staticmethod
@@ -2489,6 +2493,15 @@ class SearchService:
             return False
         # A-share ETF
         if code.isdigit() and len(code) == 6 and code.startswith(SearchService._A_ETF_PREFIXES):
+            return True
+        # Open-end fund (00/01/02/03/31/36 prefix)
+        if code.isdigit() and len(code) == 6 and code.startswith(SearchService._OPEN_FUND_PREFIXES):
+            return True
+        # 行业板块 (88xxxx, 86xxxx)
+        if code.isdigit() and len(code) == 6 and code.startswith(SearchService._BOARD_PREFIXES):
+            return True
+        # 概念板块 (B82xxx)
+        if code.startswith(SearchService._CONCEPT_PREFIXES):
             return True
         # US index (SPX, DJI, IXIC etc.)
         if is_us_index_code(code):
@@ -3998,7 +4011,11 @@ class SearchService:
             search_dimensions = [
                 {
                     'name': 'latest_news',
-                    'query': f"{stock_name} {stock_code} 最新 新闻 重大 事件",
+                    'query': (
+                        f"{stock_name} {stock_code} 最新 新闻 行情 动态"
+                        if is_index_etf
+                        else f"{stock_name} {stock_code} 最新 新闻 重大 事件"
+                    ),
                     'desc': '最新消息',
                     'tavily_topic': 'news',
                     'strict_freshness': True,
@@ -4116,6 +4133,9 @@ class SearchService:
                     response,
                     search_days=search_days,
                     max_results=provider_max_results,
+                    # SearXNG 自建实例走国内通用引擎，结果普遍无 publishedDate，
+                    # 若按严格新鲜度过滤会全部丢弃（drop_unknown），故对该 provider 放行未知日期
+                    keep_unknown=isinstance(provider, SearXNGSearchProvider),
                     log_scope=f"{stock_code}:{provider.name}:{dim['name']}",
                 )
             elif dim['name'] in self.ANALYTICAL_INTEL_DIMENSIONS:
